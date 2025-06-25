@@ -10,6 +10,9 @@ CREATE TABLE IF NOT EXISTS projects (
     language VARCHAR(100),
     testing_tool VARCHAR(100),
     project_info JSONB,
+    files_count INTEGER DEFAULT 0,
+    received_files_count INTEGER DEFAULT 0,
+    has_test_results BOOLEAN DEFAULT FALSE,
     status VARCHAR(50) DEFAULT 'initialized',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

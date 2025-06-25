@@ -51,6 +51,7 @@ curl -X POST http://localhost:5000/initAnalize/my-company/web-app/123e4567-e89b-
   -d '{
     "language": "Go",
     "testing_tool": "k6",
+    "files_count": 3,
     "project_info": {
       "description": "Веб-приложение для онлайн магазина",
       "version": "2.1.0",
@@ -65,7 +66,8 @@ curl -X POST http://localhost:5000/initAnalize/my-company/web-app/123e4567-e89b-
 {
   "message": "Analysis initialized successfully",
   "project_id": 1,
-  "uuid": "123e4567-e89b-12d3-a456-426614174000"
+  "uuid": "123e4567-e89b-12d3-a456-426614174000",
+  "files_count": 3
 }
 ```
 
@@ -108,7 +110,22 @@ curl -X POST http://localhost:5000/sendFile/123e4567-e89b-12d3-a456-426614174000
 {
   "message": "File received and analyzed successfully",
   "filename": "main.go",
-  "uuid": "123e4567-e89b-12d3-a456-426614174000"
+  "uuid": "123e4567-e89b-12d3-a456-426614174000",
+  "received_files_count": 1,
+  "total_files_count": 3,
+  "ready_for_analysis": false
+}
+```
+
+**Ответ для последнего файла (если все файлы получены и есть результаты тестов):**
+```json
+{
+  "message": "File received and analyzed successfully",
+  "filename": "database/connection.go",
+  "uuid": "123e4567-e89b-12d3-a456-426614174000",
+  "received_files_count": 3,
+  "total_files_count": 3,
+  "ready_for_analysis": true
 }
 ```
 
@@ -174,11 +191,25 @@ curl -X POST http://localhost:5000/sendResults/123e4567-e89b-12d3-a456-426614174
   }'
 ```
 
-**Ответ:**
+**Ответ (если не все файлы получены):**
 ```json
 {
   "message": "Test results received successfully",
-  "uuid": "123e4567-e89b-12d3-a456-426614174000"
+  "uuid": "123e4567-e89b-12d3-a456-426614174000",
+  "received_files_count": 2,
+  "total_files_count": 3,
+  "ready_for_analysis": false
+}
+```
+
+**Ответ (если все файлы получены - запускается анализ):**
+```json
+{
+  "message": "Test results received successfully",
+  "uuid": "123e4567-e89b-12d3-a456-426614174000",
+  "received_files_count": 3,
+  "total_files_count": 3,
+  "ready_for_analysis": true
 }
 ```
 
@@ -266,17 +297,23 @@ curl -X GET http://localhost:5000/getAnalizeResults/123e4567-e89b-12d3-a456-4266
 # 1. Проверка сервиса
 curl -X GET http://localhost:5000/health
 
-# 2. Инициализация проекта
+# 2. Инициализация проекта (указываем количество файлов)
 curl -X POST http://localhost:5000/initAnalize/test-company/my-api/550e8400-e29b-41d4-a716-446655440000 \
   -H "Content-Type: application/json" \
-  -d '{"language": "Go", "testing_tool": "k6", "project_info": {"version": "1.0"}}'
+  -d '{"language": "Go", "testing_tool": "k6", "files_count": 2, "project_info": {"version": "1.0"}}'
 
-# 3. Загрузка файлов (можно несколько)
+# 3. Загрузка файлов (по одному, должно соответствовать files_count)
+# Файл 1
 curl -X POST http://localhost:5000/sendFile/550e8400-e29b-41d4-a716-446655440000 \
   -H "Content-Type: application/json" \
   -d '{"filename": "main.go", "content": "package main\n\nfunc main() {\n    // код сервера\n}"}'
 
-# 4. Отправка результатов тестирования
+# Файл 2 (последний - после него и sendResults запустится анализ)
+curl -X POST http://localhost:5000/sendFile/550e8400-e29b-41d4-a716-446655440000 \
+  -H "Content-Type: application/json" \
+  -d '{"filename": "handlers.go", "content": "package main\n\nfunc handler() {\n    // обработчики\n}"}'
+
+# 4. Отправка результатов тестирования (анализ запустится если все файлы получены)
 curl -X POST http://localhost:5000/sendResults/550e8400-e29b-41d4-a716-446655440000 \
   -H "Content-Type: application/json" \
   -d '{"response_time_p95": {"api": 150}, "response_time_p99": {"api": 250}, "successful_calls": 9000, "failed_calls": 1000, "nonfunctional_requirements": {}, "raw_results": {}}'
@@ -284,6 +321,18 @@ curl -X POST http://localhost:5000/sendResults/550e8400-e29b-41d4-a716-446655440
 # 5. Получение результатов (может потребоваться подождать)
 curl -X GET http://localhost:5000/getAnalizeResults/550e8400-e29b-41d4-a716-446655440000
 ```
+
+## Важные изменения в логике
+
+1. **Обязательное указание количества файлов**: При инициализации обязательно указывается `files_count`
+2. **Автоматический запуск анализа**: Анализ запускается только когда:
+   - Получены все файлы (received_files_count >= files_count)
+   - Получены результаты тестирования (has_test_results = true)
+3. **Отслеживание прогресса**: Каждый ответ содержит:
+   - `received_files_count` - количество полученных файлов
+   - `total_files_count` - общее количество ожидаемых файлов
+   - `ready_for_analysis` - готовность к запуску анализа
+4. **Защита от дублирования**: Файлы с одинаковым именем перезаписываются, счетчик не увеличивается
 
 ## Инструменты для тестирования
 

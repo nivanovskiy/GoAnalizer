@@ -64,6 +64,10 @@ func (h *Handler) InitAnalyze(c *gin.Context) {
                 c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid testing tool: " + err.Error()})
                 return
         }
+        if req.FilesCount <= 0 {
+                c.JSON(http.StatusBadRequest, gin.H{"error": "Files count must be greater than 0"})
+                return
+        }
 
         // Check if project already exists
         var existingID int
@@ -76,13 +80,13 @@ func (h *Handler) InitAnalyze(c *gin.Context) {
 
         // Insert project into database
         query := `
-                INSERT INTO projects (tenant, repo, uuid, language, testing_tool, project_info, status)
-                VALUES ($1, $2, $3, $4, $5, $6, 'initialized')
+                INSERT INTO projects (tenant, repo, uuid, language, testing_tool, project_info, files_count, status)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, 'initialized')
                 RETURNING id`
         
         var projectID int
         err = h.db.QueryRow(context.Background(), query, 
-                tenant, repo, projectUUID, req.Language, req.TestingTool, req.ProjectInfo).Scan(&projectID)
+                tenant, repo, projectUUID, req.Language, req.TestingTool, req.ProjectInfo, req.FilesCount).Scan(&projectID)
         if err != nil {
                 c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create project: " + err.Error()})
                 return
@@ -98,9 +102,10 @@ func (h *Handler) InitAnalyze(c *gin.Context) {
         }
 
         c.JSON(http.StatusCreated, gin.H{
-                "message":    "Analysis initialized successfully",
-                "project_id": projectID,
-                "uuid":       projectUUID,
+                "message":     "Analysis initialized successfully",
+                "project_id":  projectID,
+                "uuid":        projectUUID,
+                "files_count": req.FilesCount,
         })
 }
 
@@ -158,24 +163,67 @@ func (h *Handler) SendFile(c *gin.Context) {
                 fileAnalysis = json.RawMessage(fileAnalysisBytes)
         }
 
-        // Insert or update file
-        query := `
+        // Insert or update file and increment counter
+        tx, err := h.db.Begin(context.Background())
+        if err != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": "Database transaction failed: " + err.Error()})
+                return
+        }
+        defer tx.Rollback(context.Background())
+
+        // Insert/update file
+        fileQuery := `
                 INSERT INTO project_files (project_uuid, filename, content, file_analysis)
                 VALUES ($1, $2, $3, $4)
                 ON CONFLICT (project_uuid, filename)
                 DO UPDATE SET content = EXCLUDED.content, file_analysis = EXCLUDED.file_analysis`
         
-        _, err = h.db.Exec(context.Background(), query,
+        _, err = tx.Exec(context.Background(), fileQuery,
                 projectUUID, req.Filename, req.Content, fileAnalysis)
         if err != nil {
                 c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save file: " + err.Error()})
                 return
         }
 
+        // Increment received files count (only if it's a new file)
+        countQuery := `
+                UPDATE projects 
+                SET received_files_count = (
+                    SELECT COUNT(DISTINCT filename) 
+                    FROM project_files 
+                    WHERE project_uuid = $1
+                ),
+                updated_at = CURRENT_TIMESTAMP
+                WHERE uuid = $1
+                RETURNING files_count, received_files_count, has_test_results`
+        
+        var filesCount, receivedFilesCount int
+        var hasTestResults bool
+        err = tx.QueryRow(context.Background(), countQuery, projectUUID).Scan(&filesCount, &receivedFilesCount, &hasTestResults)
+        if err != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update files count: " + err.Error()})
+                return
+        }
+
+        // Commit transaction
+        if err = tx.Commit(context.Background()); err != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit transaction: " + err.Error()})
+                return
+        }
+
+        // Check if we should trigger analysis
+        shouldTriggerAnalysis := receivedFilesCount >= filesCount && hasTestResults
+        if shouldTriggerAnalysis {
+                h.analyzer.TriggerFinalAnalysis(projectUUID)
+        }
+
         c.JSON(http.StatusOK, gin.H{
-                "message":  "File received and analyzed successfully",
-                "filename": req.Filename,
-                "uuid":     projectUUID,
+                "message":              "File received and analyzed successfully",
+                "filename":             req.Filename,
+                "uuid":                 projectUUID,
+                "received_files_count": receivedFilesCount,
+                "total_files_count":    filesCount,
+                "ready_for_analysis":   shouldTriggerAnalysis,
         })
 }
 
@@ -241,21 +289,34 @@ func (h *Handler) SendResults(c *gin.Context) {
                 return
         }
 
-        // Update project status to indicate results received
-        _, err = h.db.Exec(context.Background(),
-                "UPDATE projects SET status = 'results_received', updated_at = CURRENT_TIMESTAMP WHERE uuid = $1",
-                projectUUID)
+        // Update project status to indicate results received and check if ready for analysis
+        updateQuery := `
+                UPDATE projects 
+                SET status = 'results_received', 
+                    has_test_results = true, 
+                    updated_at = CURRENT_TIMESTAMP 
+                WHERE uuid = $1
+                RETURNING files_count, received_files_count`
+        
+        var filesCount, receivedFilesCount int
+        err = h.db.QueryRow(context.Background(), updateQuery, projectUUID).Scan(&filesCount, &receivedFilesCount)
         if err != nil {
                 c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update project status: " + err.Error()})
                 return
         }
 
-        // Trigger final analysis
-        h.analyzer.TriggerFinalAnalysis(projectUUID)
+        // Trigger final analysis if all files are received
+        shouldTriggerAnalysis := receivedFilesCount >= filesCount
+        if shouldTriggerAnalysis {
+                h.analyzer.TriggerFinalAnalysis(projectUUID)
+        }
 
         c.JSON(http.StatusOK, gin.H{
-                "message": "Test results received successfully",
-                "uuid":    projectUUID,
+                "message":              "Test results received successfully",
+                "uuid":                 projectUUID,
+                "received_files_count": receivedFilesCount,
+                "total_files_count":    filesCount,
+                "ready_for_analysis":   shouldTriggerAnalysis,
         })
 }
 

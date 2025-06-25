@@ -75,3 +75,6 @@ Changelog:
 - Background analysis processing working correctly
 - Database migrations and connection pool configured
 - Server successfully running on port 5000 with API documentation
+- Enhanced with file counting logic: initAnalize now requires files_count parameter
+- Automatic analysis triggering only when all files received AND test results submitted
+- Progress tracking in all responses with received_files_count and ready_for_analysis status
