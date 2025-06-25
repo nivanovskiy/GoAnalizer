@@ -1,0 +1,29 @@
+modules = ["go", "go-1.21", "go-1.23"]
+
+[nix]
+channel = "stable-24_05"
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Go Backend Server"
+
+[[workflows.workflow]]
+name = "Go Backend Server"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "go run main.go"
+waitForPort = 5000
+
+[[ports]]
+localPort = 5000
+externalPort = 80
