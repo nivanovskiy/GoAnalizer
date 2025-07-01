@@ -9,6 +9,7 @@ import (
         "github.com/performance-analyzer/config"
         "github.com/performance-analyzer/database"
         "github.com/performance-analyzer/handlers"
+        "github.com/performance-analyzer/middleware"
         "github.com/performance-analyzer/services"
 )
 
@@ -38,8 +39,12 @@ func main() {
         // Initialize handlers
         handler := handlers.New(db, analyzer)
 
-        // Setup Gin router
-        router := gin.Default()
+        // Setup Gin router with detailed logging
+        router := gin.New()
+        
+        // Add detailed HTTP request/response logging
+        router.Use(middleware.DetailedHTTPLogger())
+        router.Use(gin.Recovery())
 
         // API routes
         api := router.Group("/")
@@ -78,7 +83,7 @@ func main() {
                 port = "5000"
         }
 
-        log.Printf("Starting server on port %s", port)
+        log.Printf("Starting server on port %s with detailed HTTP logging enabled", port)
         if err := router.Run("0.0.0.0:" + port); err != nil {
                 log.Fatalf("Failed to start server: %v", err)
         }

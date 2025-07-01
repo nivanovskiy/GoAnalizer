@@ -78,3 +78,7 @@ Changelog:
 - Enhanced with file counting logic: initAnalize now requires files_count parameter
 - Automatic analysis triggering only when all files received AND test results submitted
 - Progress tracking in all responses with received_files_count and ready_for_analysis status
+- July 1, 2025: Added comprehensive HTTP request/response logging
+- Implemented detailed logging middleware for all incoming API requests
+- Added logged HTTP client for outgoing requests to AI service
+- All HTTP traffic now logged with headers, bodies, timing, and response data

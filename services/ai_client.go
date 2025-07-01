@@ -1,20 +1,19 @@
 package services
 
 import (
-        "bytes"
         "encoding/json"
         "fmt"
-        "io"
+        "log"
         "net/http"
         "strings"
-        "time"
 
         "github.com/performance-analyzer/models"
+        "github.com/performance-analyzer/utils"
 )
 
 type AIClient struct {
         baseURL    string
-        httpClient *http.Client
+        httpClient *utils.LoggedHTTPClient
 }
 
 func NewAIClient(baseURL string) *AIClient {
@@ -23,10 +22,8 @@ func NewAIClient(baseURL string) *AIClient {
         }
 
         return &AIClient{
-                baseURL: baseURL,
-                httpClient: &http.Client{
-                        Timeout: 120 * time.Second, // 2 minutes timeout for AI requests
-                },
+                baseURL:    baseURL,
+                httpClient: utils.NewLoggedHTTPClient(),
         }
 }
 
@@ -47,43 +44,27 @@ func (c *AIClient) Query(query string) (*models.AIModelResponse, error) {
                 TopK:            0,
         }
 
-        jsonBody, err := json.Marshal(requestBody)
-        if err != nil {
-                return nil, fmt.Errorf("failed to marshal request: %w", err)
-        }
-
-        // Create HTTP request
+        // Make the request with detailed logging
         url := c.baseURL + "/api/v1/query"
-        req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
-        if err != nil {
-                return nil, fmt.Errorf("failed to create request: %w", err)
-        }
-
-        req.Header.Set("Content-Type", "application/json")
-        req.Header.Set("Accept", "application/json")
-
-        // Make the request
-        resp, err := c.httpClient.Do(req)
+        log.Printf("Making AI service request to: %s", url)
+        
+        resp, err := c.httpClient.Post(url, requestBody)
         if err != nil {
                 // Return mock response when AI service is unavailable
                 return c.getMockResponse(query), nil
         }
         defer resp.Body.Close()
 
-        // Read response body
-        body, err := io.ReadAll(resp.Body)
-        if err != nil {
-                return c.getMockResponse(query), nil
-        }
-
         // Check for HTTP errors
         if resp.StatusCode != http.StatusOK {
+                log.Printf("AI service returned status %d, using mock response", resp.StatusCode)
                 return c.getMockResponse(query), nil
         }
 
         // Parse response
         var aiResponse models.AIModelResponse
-        if err := json.Unmarshal(body, &aiResponse); err != nil {
+        if err := json.NewDecoder(resp.Body).Decode(&aiResponse); err != nil {
+                log.Printf("Failed to decode AI response: %v, using mock response", err)
                 return c.getMockResponse(query), nil
         }
 
@@ -97,12 +78,10 @@ func (c *AIClient) Query(query string) (*models.AIModelResponse, error) {
 
 // HealthCheck checks if the AI service is available
 func (c *AIClient) HealthCheck() error {
-        req, err := http.NewRequest("GET", c.baseURL+"/health", nil)
-        if err != nil {
-                return fmt.Errorf("failed to create health check request: %w", err)
-        }
-
-        resp, err := c.httpClient.Do(req)
+        url := c.baseURL + "/health"
+        log.Printf("Performing AI service health check: %s", url)
+        
+        resp, err := c.httpClient.Get(url)
         if err != nil {
                 return fmt.Errorf("health check request failed: %w", err)
         }
